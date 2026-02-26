@@ -29,6 +29,15 @@ import StatusBadge from '@/components/ui/StatusBadge'
 import { type Customer } from '@/data/mockData'
 import { cn } from '@/lib/utils'
 
+interface BQCustomer {
+  id: string; name: string; email: string; company: string; tier: string
+  health_score: number; churn_risk: number; logins_per_week: number
+  features_used: number; total_features: number; days_since_last_login: number
+  support_tickets: number; onboarding_status: string; onboarding_day: number
+  upsell_ready: boolean; upsell_value: number | null; arr: number
+  last_login: string; created_at: string
+}
+
 const fetcher = (url: string) => fetch(url).then(r => r.json())
 
 // --- Claude AI Insights ---
@@ -123,7 +132,7 @@ export default function ProfessionalPage() {
   // Map BigQuery snake_case to camelCase
   const customers = useMemo(() => {
     if (!data?.customers) return []
-    return data.customers.map((c: any) => ({
+    return data.customers.map((c: BQCustomer) => ({
       ...c,
       healthScore: c.health_score,
       churnRisk: c.churn_risk,
@@ -141,7 +150,7 @@ export default function ProfessionalPage() {
 
   // Sorted customers: at-risk first, then upsell-ready, then rest
   const sortedCustomers = useMemo(() => {
-    return [...customers].sort((a: any, b: any) => {
+    return [...customers].sort((a: Customer, b: Customer) => {
       const aRisk = a.churnRisk > 50 ? 0 : a.upsellReady ? 1 : 2
       const bRisk = b.churnRisk > 50 ? 0 : b.upsellReady ? 1 : 2
       if (aRisk !== bRisk) return aRisk - bRisk
@@ -150,16 +159,16 @@ export default function ProfessionalPage() {
   }, [customers])
 
   const upsellReadyCustomers = useMemo(() => {
-    return customers.filter((c: any) => c.upsellReady)
+    return customers.filter((c: Customer) => c.upsellReady)
   }, [customers])
 
   const atRiskCustomers = useMemo(() => {
-    return customers.filter((c: any) => c.churnRisk > 50)
+    return customers.filter((c: Customer) => c.churnRisk > 50)
   }, [customers])
 
   // Pipeline stages
   const readyToSend = useMemo(() => {
-    return upsellReadyCustomers.filter((c: any) => c.id === 'HP001' || c.id === 'HP003' || c.id === 'HP004' || c.id === 'HP008')
+    return upsellReadyCustomers.filter((c: Customer) => c.id === 'HP001' || c.id === 'HP003' || c.id === 'HP004' || c.id === 'HP008')
   }, [upsellReadyCustomers])
 
   const monitoringCount = useMemo(() => {
@@ -289,7 +298,7 @@ export default function ProfessionalPage() {
               </div>
 
               <div className="space-y-3 max-h-[600px] overflow-y-auto pr-1 scrollbar-thin">
-                {sortedCustomers.map((customer: any, idx: number) => {
+                {sortedCustomers.map((customer: Customer, idx: number) => {
                   const hl = healthLabel(customer.healthScore)
                   const isAtRisk = customer.churnRisk > 50
                   const isUpsell = !!customer.upsellReady
@@ -498,7 +507,7 @@ export default function ProfessionalPage() {
                     <span className="text-[10px] text-text-muted ml-auto">{readyToSend.length} customers</span>
                   </div>
                   <div className="space-y-2">
-                    {readyToSend.map((c: any, i: number) => (
+                    {readyToSend.map((c: Customer, i: number) => (
                       <motion.div
                         key={c.id}
                         initial={{ opacity: 0, x: 10 }}

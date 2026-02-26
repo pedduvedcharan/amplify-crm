@@ -19,6 +19,15 @@ import StatusBadge from '@/components/ui/StatusBadge'
 import { type Customer } from '@/data/mockData'
 import { cn } from '@/lib/utils'
 
+interface BQCustomer {
+  id: string; name: string; email: string; company: string; tier: string
+  health_score: number; churn_risk: number; logins_per_week: number
+  features_used: number; total_features: number; days_since_last_login: number
+  support_tickets: number; onboarding_status: string; onboarding_day: number
+  upsell_ready: boolean; upsell_value: number | null; arr: number
+  last_login: string; created_at: string
+}
+
 const fetcher = (url: string) => fetch(url).then(r => r.json())
 
 const faqQuestions = [
@@ -154,7 +163,7 @@ export default function StarterPage() {
 
   const customers = useMemo(() => {
     if (!data?.customers) return []
-    return data.customers.map((c: any) => ({
+    return data.customers.map((c: BQCustomer) => ({
       ...c,
       healthScore: c.health_score,
       churnRisk: c.churn_risk,
@@ -170,7 +179,7 @@ export default function StarterPage() {
   }, [data])
 
   const sortedCustomers = useMemo(() => {
-    return [...customers].sort((a: any, b: any) => {
+    return [...customers].sort((a: Customer, b: Customer) => {
       const statusOrder: Record<string, number> = { stuck: 0, on_track: 1, done: 2 }
       const aOrder = statusOrder[a.onboardingStatus || 'on_track']
       const bOrder = statusOrder[b.onboardingStatus || 'on_track']
@@ -180,7 +189,7 @@ export default function StarterPage() {
   }, [customers])
 
   const firstStuckCustomer = useMemo(() => {
-    return sortedCustomers.find((c: any) => c.onboardingStatus === 'stuck')
+    return sortedCustomers.find((c: Customer) => c.onboardingStatus === 'stuck')
   }, [sortedCustomers])
 
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null)
@@ -189,7 +198,7 @@ export default function StarterPage() {
   const effectiveSelectedId = selectedCustomerId ?? firstStuckCustomer?.id ?? null
 
   const selectedCustomer = useMemo(() => {
-    return customers.find((c: any) => c.id === effectiveSelectedId) ?? firstStuckCustomer ?? null
+    return customers.find((c: Customer) => c.id === effectiveSelectedId) ?? firstStuckCustomer ?? null
   }, [effectiveSelectedId, customers, firstStuckCustomer])
 
   const emailForPreview = selectedCustomer

@@ -54,6 +54,15 @@ interface MappedCustomer {
   upsellValue?: number | null
 }
 
+interface BQCustomer {
+  id: string; name: string; email: string; company: string; tier: string
+  health_score: number; churn_risk: number; logins_per_week: number
+  features_used: number; total_features: number; days_since_last_login: number
+  support_tickets: number; onboarding_status: string; onboarding_day: number
+  upsell_ready: boolean; upsell_value: number | null; arr: number
+  last_login: string; created_at: string
+}
+
 // -- SWR fetcher --------------------------------------------------------------
 
 const fetcher = (url: string) => fetch(url).then(r => r.json())
@@ -140,7 +149,7 @@ export default function EnterprisePage() {
   // Map BigQuery snake_case fields to camelCase + derive enterprise-specific fields
   const customers: MappedCustomer[] = useMemo(() => {
     if (!data?.customers) return []
-    return data.customers.slice(0, 10).map((c: any) => ({
+    return data.customers.slice(0, 10).map((c: BQCustomer) => ({
       ...c,
       healthScore: c.health_score,
       churnRisk: c.churn_risk,
