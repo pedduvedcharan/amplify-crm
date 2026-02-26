@@ -1,6 +1,7 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
+import useSWR from 'swr'
 import { motion, AnimatePresence } from 'framer-motion'
 import CountUp from 'react-countup'
 import { LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip } from 'recharts'
@@ -19,14 +20,47 @@ import {
   Headphones,
   Zap,
   Bot,
+  Loader2,
 } from 'lucide-react'
 
 import PageTransition from '@/components/ui/PageTransition'
 import KPICard from '@/components/ui/KPICard'
 import LiveAgentFeed from '@/components/feed/LiveAgentFeed'
 import StatusBadge from '@/components/ui/StatusBadge'
-import { enterpriseCustomers, enterpriseStats, weeklyReportSummary, type Customer } from '@/data/mockData'
 import { cn, formatCurrency } from '@/lib/utils'
+
+// -- Types --------------------------------------------------------------------
+
+interface MappedCustomer {
+  id: string
+  name: string
+  email: string
+  company: string
+  tier: string
+  healthScore: number
+  churnRisk: number
+  loginsPerWeek: number
+  featuresUsed: number
+  totalFeatures: number
+  daysSinceLogin: number
+  supportTickets: number
+  apiCalls: number
+  apiTrend: number
+  arr: number
+  lastLogin: string
+  onboardingStatus?: string
+  onboardingDay?: number
+  upsellReady?: boolean
+  upsellValue?: number | null
+}
+
+// -- SWR fetcher --------------------------------------------------------------
+
+const fetcher = (url: string) => fetch(url).then(r => r.json())
+
+// -- Hardcoded weekly report summary (previously from mockData) ---------------
+
+const weeklyReportSummary = `This week's enterprise portfolio shows concerning signals from 2 accounts. Acme Corp represents the highest churn risk at $380K ARR \u2014 login frequency declined 91%, with only 2 of 15 features remaining active. Immediate executive escalation recommended. Globex ($290K ARR) also shows HIGH risk with a 14-day login gap and declining API usage. Remaining 8 accounts are stable or improving, with Hooli and Apex Industries showing the strongest engagement metrics.`
 
 // -- Helpers ------------------------------------------------------------------
 
@@ -51,17 +85,14 @@ function riskTint(churnRisk: number) {
   return 'bg-g-green/5 border border-g-green/15'
 }
 
-const companyColors: Record<string, string> = {
-  'Acme Corp': '#EA4335',
-  'Globex': '#F29900',
-  'Initech': '#4285F4',
-  'Umbrella Corp': '#FBBC04',
-  'Massive Dynamics': '#34A853',
-  'DynaCorp': '#9334E6',
-  'Hooli': '#4285F4',
-  'Piedmont': '#F29900',
-  'Apex Industries': '#34A853',
-  'Zenith Corp': '#9334E6',
+// Dynamic color palette for company avatars
+const avatarColors = [
+  '#EA4335', '#F29900', '#4285F4', '#FBBC04', '#34A853',
+  '#9334E6', '#4285F4', '#F29900', '#34A853', '#9334E6',
+]
+
+function getCompanyColor(company: string, index: number): string {
+  return avatarColors[index % avatarColors.length]
 }
 
 function getInitials(company: string) {
@@ -84,31 +115,8 @@ function generateDecliningChart(severity: 'critical' | 'high') {
   })
 }
 
-const acmeChartData = generateDecliningChart('critical')
-const globexChartData = generateDecliningChart('high')
-
-// Claude AI analysis for critical customers
-const claudeAnalysis: Record<string, string> = {
-  'Acme Corp':
-    'Acme Corp exhibits critical churn indicators. Login frequency declined 91% over 30 days. Only 2 of 15 features remain active. Recommend: immediate exec escalation, emergency QBR within 7 days.',
-  'Globex':
-    'Globex shows high churn risk. 14-day login gap with API usage declining 62%. Support tickets trending up. Schedule urgent review with account team.',
-}
-
-// Agent actions taken per critical customer
-const agentActions: Record<string, { icon: string; action: string; time: string }[]> = {
-  'Acme Corp': [
-    { icon: '\uD83D\uDCE7', action: 'Critical churn alert emailed to Account Manager', time: 'Feb 26, 9:42 AM' },
-    { icon: '\uD83D\uDCC5', action: 'Emergency QBR scheduled for Mar 4', time: 'Feb 26, 9:43 AM' },
-    { icon: '\uD83D\uDCCA', action: 'Executive risk report generated & sent', time: 'Feb 26, 9:45 AM' },
-    { icon: '\uD83D\uDCDE', action: 'CS team notified via Slack', time: 'Feb 26, 9:46 AM' },
-  ],
-  'Globex': [
-    { icon: '\uD83D\uDCE7', action: 'High-risk alert emailed to Account Manager', time: 'Feb 26, 9:50 AM' },
-    { icon: '\uD83D\uDCC5', action: 'QBR scheduled for Mar 6', time: 'Feb 26, 9:51 AM' },
-    { icon: '\uD83D\uDCCA', action: 'Usage decline report generated', time: 'Feb 26, 9:53 AM' },
-  ],
-}
+const criticalChartData = generateDecliningChart('critical')
+const highChartData = generateDecliningChart('high')
 
 // Shared motion ease
 const smoothEase: [number, number, number, number] = [0.25, 0.46, 0.45, 0.94]
@@ -125,9 +133,52 @@ const chartTooltipStyle = {
 // -- Page Component -----------------------------------------------------------
 
 export default function EnterprisePage() {
-  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null)
+  const [selectedCustomer, setSelectedCustomer] = useState<MappedCustomer | null>(null)
 
-  const criticalCustomers = enterpriseCustomers.filter(c => c.churnRisk > 70)
+  const { data, isLoading } = useSWR('/api/customers/enterprise', fetcher, { refreshInterval: 30000 })
+
+  // Map BigQuery snake_case fields to camelCase + derive enterprise-specific fields
+  const customers: MappedCustomer[] = useMemo(() => {
+    if (!data?.customers) return []
+    return data.customers.slice(0, 10).map((c: any) => ({
+      ...c,
+      healthScore: c.health_score,
+      churnRisk: c.churn_risk,
+      loginsPerWeek: c.logins_per_week,
+      featuresUsed: c.features_used,
+      totalFeatures: c.total_features,
+      daysSinceLogin: c.days_since_last_login,
+      supportTickets: c.support_tickets,
+      apiCalls: Math.floor(c.logins_per_week * 500),
+      apiTrend: c.churn_risk > 50 ? -Math.floor(c.churn_risk) : Math.floor(c.health_score / 4),
+      arr: c.arr,
+      company: c.company?.split(' - ')[0] || c.company,
+      lastLogin: c.last_login ? formatRelativeDate(c.last_login) : 'N/A',
+    }))
+  }, [data])
+
+  // Top 2 customers by churn_risk for the critical section
+  const criticalCustomers = useMemo(() => {
+    return [...customers].sort((a, b) => b.churnRisk - a.churnRisk).slice(0, 2)
+  }, [customers])
+
+  // Stats from API
+  const totalARR = data?.stats?.total_arr ?? 0
+  const criticalRiskCount = data?.stats?.critical_risk ?? 0
+  const avgLoginFreq = data?.stats?.avg_login_freq ?? 0
+  const totalAccounts = data?.stats?.total ?? 0
+
+  // Loading state
+  if (isLoading) {
+    return (
+      <PageTransition>
+        <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
+          <Loader2 size={40} className="animate-spin text-g-purple" />
+          <p className="text-sm text-text-secondary font-medium">Loading enterprise data from BigQuery...</p>
+        </div>
+      </PageTransition>
+    )
+  }
 
   return (
     <PageTransition>
@@ -158,7 +209,7 @@ export default function EnterprisePage() {
                 </h1>
               </div>
               <p className="text-sm text-text-secondary ml-12">
-                10 accounts &mdash; $2.4M ARR under 24/7 AI monitoring
+                {totalAccounts.toLocaleString()} accounts &mdash; {formatCurrency(totalARR)} ARR under 24/7 AI monitoring
               </p>
             </div>
 
@@ -183,10 +234,10 @@ export default function EnterprisePage() {
           <KPICard
             icon={Building2}
             label="Total ARR"
-            value={2.4}
+            value={totalARR >= 1_000_000 ? +(totalARR / 1_000_000).toFixed(1) : totalARR}
             prefix="$"
-            suffix="M"
-            decimals={1}
+            suffix={totalARR >= 1_000_000 ? 'M' : ''}
+            decimals={totalARR >= 1_000_000 ? 1 : 0}
             sub="Combined enterprise portfolio value"
             color="purple"
             delay={0}
@@ -194,7 +245,7 @@ export default function EnterprisePage() {
           <KPICard
             icon={AlertTriangle}
             label="Critical Risk"
-            value={enterpriseStats.criticalRisk}
+            value={criticalRiskCount}
             sub="Accounts requiring immediate action"
             color="red"
             delay={0.1}
@@ -203,7 +254,7 @@ export default function EnterprisePage() {
           <KPICard
             icon={Activity}
             label="Avg Login Frequency"
-            value={enterpriseStats.avgLoginFreq}
+            value={avgLoginFreq}
             suffix="x/wk"
             decimals={1}
             sub="Across all enterprise accounts"
@@ -213,7 +264,7 @@ export default function EnterprisePage() {
           <KPICard
             icon={FileText}
             label="Reports Sent"
-            value={enterpriseStats.reportsSentThisWeek}
+            value={10}
             sub="Auto-generated this week by AI"
             color="blue"
             delay={0.3}
@@ -255,7 +306,7 @@ export default function EnterprisePage() {
 
           {/* Heatmap grid 5x2 */}
           <div className="grid grid-cols-5 gap-3">
-            {enterpriseCustomers.map((customer, i) => {
+            {customers.map((customer, i) => {
               const risk = riskLevel(customer.churnRisk)
               const isCritical = customer.churnRisk > 80
               const isSelected = selectedCustomer?.id === customer.id
@@ -279,7 +330,7 @@ export default function EnterprisePage() {
                   <div className="flex items-center gap-3 mb-3">
                     <div
                       className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 text-sm font-bold text-white shadow-sm"
-                      style={{ backgroundColor: companyColors[customer.company] || '#9334E6' }}
+                      style={{ backgroundColor: getCompanyColor(customer.company, i) }}
                     >
                       {getInitials(customer.company)}
                     </div>
@@ -293,7 +344,7 @@ export default function EnterprisePage() {
                   <div className="mb-3">
                     <div className="flex items-center justify-between mb-1">
                       <span className="text-[10px] text-text-muted font-medium">Churn Risk</span>
-                      <span className={cn('text-xs font-bold', risk.text)}>{customer.churnRisk}%</span>
+                      <span className={cn('text-xs font-bold', risk.text)}>{customer.churnRisk.toFixed(1)}%</span>
                     </div>
                     <div className="h-2 bg-page rounded-full overflow-hidden">
                       <motion.div
@@ -336,7 +387,7 @@ export default function EnterprisePage() {
                     <div className="flex items-center gap-3">
                       <div
                         className="w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold text-white shadow-sm"
-                        style={{ backgroundColor: companyColors[selectedCustomer.company] || '#9334E6' }}
+                        style={{ backgroundColor: getCompanyColor(selectedCustomer.company, customers.findIndex(c => c.id === selectedCustomer.id)) }}
                       >
                         {getInitials(selectedCustomer.company)}
                       </div>
@@ -402,18 +453,18 @@ export default function EnterprisePage() {
                             </div>
                           </div>
                           <span className={cn('text-2xl font-extrabold tracking-tight', riskLevel(selectedCustomer.churnRisk).text)}>
-                            {selectedCustomer.churnRisk}%
+                            {selectedCustomer.churnRisk.toFixed(1)}%
                           </span>
                         </div>
                       </div>
 
-                      {/* Mini line chart (if available) */}
-                      {(selectedCustomer.company === 'Acme Corp' || selectedCustomer.company === 'Globex') && (
+                      {/* Mini line chart - show for top 2 critical customers */}
+                      {criticalCustomers.some(c => c.id === selectedCustomer.id) && (
                         <div className="bg-page rounded-2xl p-5 border border-gray-100">
                           <h4 className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-2">30-Day Usage Trend</h4>
                           <div className="h-24">
                             <ResponsiveContainer width="100%" height="100%">
-                              <LineChart data={selectedCustomer.company === 'Acme Corp' ? acmeChartData : globexChartData}>
+                              <LineChart data={selectedCustomer.id === criticalCustomers[0]?.id ? criticalChartData : highChartData}>
                                 <XAxis dataKey="day" tick={{ fill: '#9AA0A6', fontSize: 9 }} axisLine={false} tickLine={false} interval={6} />
                                 <YAxis tick={{ fill: '#9AA0A6', fontSize: 9 }} axisLine={false} tickLine={false} width={30} />
                                 <Tooltip
@@ -459,10 +510,28 @@ export default function EnterprisePage() {
           </div>
 
           <div className="space-y-6">
+            {criticalCustomers.length === 0 && (
+              <div className="text-center py-8 text-text-secondary text-sm">
+                No critical-risk customers detected. All enterprise accounts are healthy.
+              </div>
+            )}
             {criticalCustomers.map((customer, ci) => {
-              const chartData = customer.company === 'Acme Corp' ? acmeChartData : globexChartData
-              const analysis = claudeAnalysis[customer.company] ?? ''
-              const actions = agentActions[customer.company] ?? []
+              const chartData = ci === 0 ? criticalChartData : highChartData
+              const analysis = ci === 0
+                ? `${customer.company} exhibits concerning churn indicators. Login frequency is ${customer.loginsPerWeek}x/week with ${customer.featuresUsed} of ${customer.totalFeatures} features active. Churn risk at ${customer.churnRisk.toFixed(1)}%. Recommend: immediate exec escalation, emergency QBR within 7 days.`
+                : `${customer.company} shows elevated churn risk at ${customer.churnRisk.toFixed(1)}%. ${customer.daysSinceLogin}-day login gap with declining engagement. Support tickets trending up. Schedule urgent review with account team.`
+              const actions = ci === 0
+                ? [
+                    { icon: '\uD83D\uDCE7', action: `Critical churn alert emailed to Account Manager`, time: 'Feb 26, 9:42 AM' },
+                    { icon: '\uD83D\uDCC5', action: 'Emergency QBR scheduled for Mar 4', time: 'Feb 26, 9:43 AM' },
+                    { icon: '\uD83D\uDCCA', action: 'Executive risk report generated & sent', time: 'Feb 26, 9:45 AM' },
+                    { icon: '\uD83D\uDCDE', action: 'CS team notified via Slack', time: 'Feb 26, 9:46 AM' },
+                  ]
+                : [
+                    { icon: '\uD83D\uDCE7', action: `High-risk alert emailed to Account Manager`, time: 'Feb 26, 9:50 AM' },
+                    { icon: '\uD83D\uDCC5', action: 'QBR scheduled for Mar 6', time: 'Feb 26, 9:51 AM' },
+                    { icon: '\uD83D\uDCCA', action: 'Usage decline report generated', time: 'Feb 26, 9:53 AM' },
+                  ]
 
               return (
                 <motion.div
@@ -476,7 +545,7 @@ export default function EnterprisePage() {
                   <div className="flex items-center gap-3 mb-5">
                     <div
                       className="w-11 h-11 rounded-full flex items-center justify-center text-sm font-bold text-white shadow-sm"
-                      style={{ backgroundColor: companyColors[customer.company] || '#EA4335' }}
+                      style={{ backgroundColor: getCompanyColor(customer.company, customers.findIndex(c => c.id === customer.id)) }}
                     >
                       {getInitials(customer.company)}
                     </div>
@@ -575,12 +644,14 @@ export default function EnterprisePage() {
                             </div>
                           </div>
                           <span className="text-3xl font-extrabold tracking-tight text-churn-critical">
-                            <CountUp start={0} end={customer.churnRisk} duration={1.5} delay={0.6 + ci * 0.15} suffix="%" />
+                            <CountUp start={0} end={parseFloat(customer.churnRisk.toFixed(1))} duration={1.5} delay={0.6 + ci * 0.15} suffix="%" decimals={1} />
                           </span>
                         </div>
                         <div className="flex items-center gap-1.5">
                           <AlertTriangle size={12} className="text-churn-critical" />
-                          <span className="text-[11px] text-churn-critical font-semibold">Exceeds critical threshold (80%)</span>
+                          <span className="text-[11px] text-churn-critical font-semibold">
+                            {customer.churnRisk > 80 ? 'Exceeds critical threshold (80%)' : 'High risk — close monitoring required'}
+                          </span>
                         </div>
                       </div>
 
@@ -721,4 +792,23 @@ export default function EnterprisePage() {
       </div>
     </PageTransition>
   )
+}
+
+// -- Helper: format relative date from ISO date string ------------------------
+
+function formatRelativeDate(dateStr: string): string {
+  try {
+    const date = new Date(dateStr)
+    const now = new Date()
+    const diffMs = now.getTime() - date.getTime()
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
+
+    if (diffDays === 0) return 'today'
+    if (diffDays === 1) return '1d ago'
+    if (diffDays < 7) return `${diffDays}d ago`
+    if (diffDays < 30) return `${Math.floor(diffDays / 7)}w ago`
+    return `${Math.floor(diffDays / 30)}mo ago`
+  } catch {
+    return dateStr
+  }
 }

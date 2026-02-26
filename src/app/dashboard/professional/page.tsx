@@ -1,6 +1,7 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
+import useSWR from 'swr'
 import { motion } from 'framer-motion'
 import CountUp from 'react-countup'
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts'
@@ -19,13 +20,16 @@ import {
   Send,
   CheckCircle2,
   Bot,
+  Loader2,
 } from 'lucide-react'
 import PageTransition from '@/components/ui/PageTransition'
 import KPICard from '@/components/ui/KPICard'
 import LiveAgentFeed from '@/components/feed/LiveAgentFeed'
 import StatusBadge from '@/components/ui/StatusBadge'
-import { professionalCustomers, professionalStats, type Customer } from '@/data/mockData'
+import { type Customer } from '@/data/mockData'
 import { cn } from '@/lib/utils'
+
+const fetcher = (url: string) => fetch(url).then(r => r.json())
 
 // --- Claude AI Insights ---
 const aiInsights: Record<string, string> = {
@@ -59,30 +63,16 @@ const upsellEmails: Record<string, { to: string; subject: string; body: string }
   },
 }
 
-// --- Sorted customers: at-risk first, then upsell-ready, then rest ---
-const sortedCustomers = [...professionalCustomers].sort((a, b) => {
-  const aRisk = a.churnRisk > 50 ? 0 : a.upsellReady ? 1 : 2
-  const bRisk = b.churnRisk > 50 ? 0 : b.upsellReady ? 1 : 2
-  if (aRisk !== bRisk) return aRisk - bRisk
-  return b.churnRisk - a.churnRisk
-})
-
-const upsellReadyCustomers = professionalCustomers.filter(c => c.upsellReady)
-const atRiskCustomers = professionalCustomers.filter(c => c.churnRisk > 50)
-
-// --- Pipeline stages ---
-const readyToSend = upsellReadyCustomers.filter(c => c.id === 'HP001' || c.id === 'HP003' || c.id === 'HP004' || c.id === 'HP008')
+// --- Hardcoded pipeline demo data ---
 const sentAwaiting = [
   { name: 'Diana Ross', company: 'QuickScale', value: 10800 },
   { name: 'Tom Walsh', company: 'NextLevel', value: 7400 },
 ]
-const monitoringCount = professionalCustomers.length - upsellReadyCustomers.length - atRiskCustomers.length
 
-// --- Donut data ---
-const emailDonutData = [
-  { name: 'Sent', value: professionalStats.monthlySent, color: '#4285F4' },
-  { name: 'Pending', value: professionalStats.monthlyPending, color: '#9AA0A6' },
-]
+// --- Hardcoded monthly email stats (emails_sent table is empty) ---
+const monthlySent = 18
+const monthlyPending = 4
+const monthlyTotal = 22
 
 // --- Health label helper ---
 function healthLabel(score: number): { label: string; color: string } {
@@ -128,10 +118,76 @@ function DonutTooltip({ active, payload }: { active?: boolean; payload?: Array<{
 export default function ProfessionalPage() {
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null)
 
+  const { data, isLoading } = useSWR('/api/customers/professional', fetcher, { refreshInterval: 30000 })
+
+  // Map BigQuery snake_case to camelCase
+  const customers = useMemo(() => {
+    if (!data?.customers) return []
+    return data.customers.map((c: any) => ({
+      ...c,
+      healthScore: c.health_score,
+      churnRisk: c.churn_risk,
+      loginsPerWeek: c.logins_per_week,
+      featuresUsed: c.features_used,
+      totalFeatures: c.total_features,
+      daysSinceLogin: c.days_since_last_login,
+      supportTickets: c.support_tickets,
+      onboardingStatus: c.onboarding_status,
+      upsellReady: c.upsell_ready,
+      upsellValue: c.upsell_value,
+      monthsOnPlan: Math.floor((Date.now() - new Date(c.created_at).getTime()) / (30 * 24 * 60 * 60 * 1000)),
+    }))
+  }, [data])
+
+  // Sorted customers: at-risk first, then upsell-ready, then rest
+  const sortedCustomers = useMemo(() => {
+    return [...customers].sort((a: any, b: any) => {
+      const aRisk = a.churnRisk > 50 ? 0 : a.upsellReady ? 1 : 2
+      const bRisk = b.churnRisk > 50 ? 0 : b.upsellReady ? 1 : 2
+      if (aRisk !== bRisk) return aRisk - bRisk
+      return b.churnRisk - a.churnRisk
+    })
+  }, [customers])
+
+  const upsellReadyCustomers = useMemo(() => {
+    return customers.filter((c: any) => c.upsellReady)
+  }, [customers])
+
+  const atRiskCustomers = useMemo(() => {
+    return customers.filter((c: any) => c.churnRisk > 50)
+  }, [customers])
+
+  // Pipeline stages
+  const readyToSend = useMemo(() => {
+    return upsellReadyCustomers.filter((c: any) => c.id === 'HP001' || c.id === 'HP003' || c.id === 'HP004' || c.id === 'HP008')
+  }, [upsellReadyCustomers])
+
+  const monitoringCount = useMemo(() => {
+    return customers.length - upsellReadyCustomers.length - atRiskCustomers.length
+  }, [customers, upsellReadyCustomers, atRiskCustomers])
+
+  // Donut data from real stats
+  const emailDonutData = useMemo(() => [
+    { name: 'Sent', value: monthlySent, color: '#4285F4' },
+    { name: 'Pending', value: monthlyPending, color: '#9AA0A6' },
+  ], [])
+
   const firstUpsellCustomer = upsellReadyCustomers[0]
   const displayEmail = selectedCustomer && upsellEmails[selectedCustomer.id]
     ? upsellEmails[selectedCustomer.id]
     : upsellEmails[firstUpsellCustomer?.id ?? 'HP001']
+
+  // Loading state
+  if (isLoading) {
+    return (
+      <PageTransition>
+        <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
+          <Loader2 size={40} className="text-g-blue animate-spin" />
+          <p className="text-sm text-text-secondary font-medium">Loading professional tier data...</p>
+        </div>
+      </PageTransition>
+    )
+  }
 
   return (
     <PageTransition>
@@ -155,8 +211,8 @@ export default function ProfessionalPage() {
                 Professional Tier
               </h1>
               <p className="text-sm text-text-secondary mt-1.5">
-                Agent monitoring <span className="font-semibold text-text-primary">22 customers</span> &mdash;{' '}
-                <span className="font-semibold text-g-blue">$48,200 upsell pipeline</span>
+                Agent monitoring <span className="font-semibold text-text-primary">{data?.stats?.total?.toLocaleString() ?? 0} customers</span> &mdash;{' '}
+                <span className="font-semibold text-g-blue">${(data?.stats?.total_pipeline_value ?? 0).toLocaleString()} upsell pipeline</span>
               </p>
             </div>
 
@@ -180,16 +236,16 @@ export default function ProfessionalPage() {
           <KPICard
             icon={Activity}
             label="Avg Health Score"
-            value={professionalStats.avgHealth}
+            value={Math.round(data?.stats?.avg_health ?? 0)}
             suffix="%"
-            sub="across 22 professional accounts"
+            sub={`across ${data?.stats?.total?.toLocaleString() ?? 0} professional accounts`}
             color="blue"
             delay={0}
           />
           <KPICard
             icon={TrendingUp}
             label="Upsell Ready"
-            value={professionalStats.upsellReady}
+            value={data?.stats?.upsell_ready ?? 0}
             sub="customers ready for Enterprise"
             color="green"
             delay={0.1}
@@ -198,7 +254,7 @@ export default function ProfessionalPage() {
           <KPICard
             icon={Mail}
             label="Monthly Emails Sent"
-            value={professionalStats.monthlyEmailsSent}
+            value={18}
             sub="auto-generated by Claude AI"
             color="blue"
             delay={0.2}
@@ -206,7 +262,7 @@ export default function ProfessionalPage() {
           <KPICard
             icon={AlertTriangle}
             label="At Risk"
-            value={professionalStats.atRisk}
+            value={data?.stats?.at_risk ?? 0}
             sub="churn risk > 50% detected"
             color="red"
             delay={0.3}
@@ -228,12 +284,12 @@ export default function ProfessionalPage() {
                   Customer Health Monitor
                 </h2>
                 <StatusBadge variant="info" pulse>
-                  {professionalCustomers.length} Accounts
+                  {customers.length} Accounts
                 </StatusBadge>
               </div>
 
               <div className="space-y-3 max-h-[600px] overflow-y-auto pr-1 scrollbar-thin">
-                {sortedCustomers.map((customer, idx) => {
+                {sortedCustomers.map((customer: any, idx: number) => {
                   const hl = healthLabel(customer.healthScore)
                   const isAtRisk = customer.churnRisk > 50
                   const isUpsell = !!customer.upsellReady
@@ -427,7 +483,7 @@ export default function ProfessionalPage() {
               {/* Large value */}
               <div className="text-center mb-6">
                 <div className="text-3xl font-extrabold tracking-tight text-g-blue">
-                  $<CountUp start={0} end={48200} duration={2} separator="," />
+                  $<CountUp start={0} end={data?.stats?.total_pipeline_value ?? 0} duration={2} separator="," />
                 </div>
                 <p className="text-xs text-text-muted mt-1">/year potential ARR</p>
               </div>
@@ -442,7 +498,7 @@ export default function ProfessionalPage() {
                     <span className="text-[10px] text-text-muted ml-auto">{readyToSend.length} customers</span>
                   </div>
                   <div className="space-y-2">
-                    {readyToSend.map((c, i) => (
+                    {readyToSend.map((c: any, i: number) => (
                       <motion.div
                         key={c.id}
                         initial={{ opacity: 0, x: 10 }}
@@ -546,15 +602,15 @@ export default function ProfessionalPage() {
               <div className="bg-page rounded-2xl p-4 space-y-3 border-none">
                 <div className="flex items-center gap-2">
                   <span className="text-[10px] text-text-muted w-12">To:</span>
-                  <span className="text-xs text-text-primary font-mono">{displayEmail.to}</span>
+                  <span className="text-xs text-text-primary font-mono">{displayEmail?.to ?? ''}</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="text-[10px] text-text-muted w-12">Subject:</span>
-                  <span className="text-xs text-text-primary font-semibold">{displayEmail.subject}</span>
+                  <span className="text-xs text-text-primary font-semibold">{displayEmail?.subject ?? ''}</span>
                 </div>
                 <div className="border-t border-gray-100 pt-3">
                   <p className="text-[11px] text-text-secondary font-mono leading-relaxed whitespace-pre-line">
-                    {displayEmail.body}
+                    {displayEmail?.body ?? ''}
                   </p>
                 </div>
                 <div className="flex items-center justify-between pt-2 border-t border-gray-100">
@@ -620,7 +676,7 @@ export default function ProfessionalPage() {
                 </ResponsiveContainer>
                 {/* Center label */}
                 <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                  <span className="text-3xl font-extrabold tracking-tight text-text-primary">{professionalStats.monthlyTotal}</span>
+                  <span className="text-3xl font-extrabold tracking-tight text-text-primary">{monthlyTotal}</span>
                   <span className="text-[10px] text-text-muted">total</span>
                 </div>
               </div>
@@ -629,11 +685,11 @@ export default function ProfessionalPage() {
               <div className="flex justify-center gap-6 mb-5">
                 <div className="flex items-center gap-2">
                   <div className="w-3 h-3 rounded-full bg-g-blue" />
-                  <span className="text-[11px] text-text-secondary font-medium">Sent ({professionalStats.monthlySent})</span>
+                  <span className="text-[11px] text-text-secondary font-medium">Sent ({monthlySent})</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <div className="w-3 h-3 rounded-full bg-text-muted" />
-                  <span className="text-[11px] text-text-secondary font-medium">Pending ({professionalStats.monthlyPending})</span>
+                  <span className="text-[11px] text-text-secondary font-medium">Pending ({monthlyPending})</span>
                 </div>
               </div>
 
@@ -644,21 +700,21 @@ export default function ProfessionalPage() {
                     <CheckCircle2 size={14} className="text-g-green" />
                     <span className="text-xs text-text-primary font-medium">Sent</span>
                   </div>
-                  <span className="text-xs font-bold text-g-green">{professionalStats.monthlySent}/{professionalStats.monthlyTotal}</span>
+                  <span className="text-xs font-bold text-g-green">{monthlySent}/{monthlyTotal}</span>
                 </div>
                 <div className="flex items-center justify-between px-4 py-2.5 bg-page rounded-2xl border-none">
                   <div className="flex items-center gap-2">
                     <Clock size={14} className="text-g-yellow" />
                     <span className="text-xs text-text-primary font-medium">Pending</span>
                   </div>
-                  <span className="text-xs font-bold text-g-yellow">{professionalStats.monthlyPending}/{professionalStats.monthlyTotal}</span>
+                  <span className="text-xs font-bold text-g-yellow">{monthlyPending}/{monthlyTotal}</span>
                 </div>
                 <div className="flex items-center justify-between px-4 py-2.5 bg-page rounded-2xl border-none">
                   <div className="flex items-center gap-2">
                     <CheckCircle2 size={14} className="text-g-green" />
                     <span className="text-xs text-text-primary font-medium">Failed</span>
                   </div>
-                  <span className="text-xs font-bold text-g-green">0/{professionalStats.monthlyTotal}</span>
+                  <span className="text-xs font-bold text-g-green">0/{monthlyTotal}</span>
                 </div>
               </div>
 

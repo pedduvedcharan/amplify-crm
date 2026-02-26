@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useMemo } from 'react'
+import useSWR from 'swr'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   CheckCircle2,
@@ -9,13 +10,24 @@ import {
   Clock,
   AlertTriangle,
   Send,
+  Loader2,
 } from 'lucide-react'
 import PageTransition from '@/components/ui/PageTransition'
 import KPICard from '@/components/ui/KPICard'
 import LiveAgentFeed from '@/components/feed/LiveAgentFeed'
 import StatusBadge from '@/components/ui/StatusBadge'
-import { starterCustomers, starterStats, faqQuestions, type Customer } from '@/data/mockData'
+import { type Customer } from '@/data/mockData'
 import { cn } from '@/lib/utils'
+
+const fetcher = (url: string) => fetch(url).then(r => r.json())
+
+const faqQuestions = [
+  { question: 'How do I connect my first app?', count: 12 },
+  { question: 'Where is billing?', count: 8 },
+  { question: 'Can I export data?', count: 6 },
+  { question: 'How to invite team members?', count: 5 },
+  { question: 'What integrations are supported?', count: 4 },
+]
 
 const ease: [number, number, number, number] = [0.25, 0.46, 0.45, 0.94]
 
@@ -126,38 +138,86 @@ function FAQProgressCircle({ percentage }: { percentage: number }) {
   )
 }
 
+function deriveOnboardingSteps(status: string | undefined): Record<string, boolean> {
+  if (status === 'done') {
+    return { profile: true, first_login: true, feature_use: true, integration: true, first_export: true }
+  }
+  if (status === 'stuck') {
+    return { profile: true, first_login: true, feature_use: false, integration: false, first_export: false }
+  }
+  // on_track
+  return { profile: true, first_login: false, feature_use: false, integration: false, first_export: false }
+}
+
 export default function StarterPage() {
+  const { data, isLoading } = useSWR('/api/customers/starter', fetcher, { refreshInterval: 30000 })
+
+  const customers = useMemo(() => {
+    if (!data?.customers) return []
+    return data.customers.map((c: any) => ({
+      ...c,
+      healthScore: c.health_score,
+      churnRisk: c.churn_risk,
+      loginsPerWeek: c.logins_per_week,
+      featuresUsed: c.features_used,
+      totalFeatures: c.total_features,
+      daysSinceLogin: c.days_since_last_login,
+      supportTickets: c.support_tickets,
+      onboardingStatus: c.onboarding_status,
+      onboardingDay: c.onboarding_day,
+      onboardingSteps: deriveOnboardingSteps(c.onboarding_status),
+    }))
+  }, [data])
+
   const sortedCustomers = useMemo(() => {
-    return [...starterCustomers].sort((a, b) => {
-      const statusOrder = { stuck: 0, on_track: 1, done: 2 }
+    return [...customers].sort((a: any, b: any) => {
+      const statusOrder: Record<string, number> = { stuck: 0, on_track: 1, done: 2 }
       const aOrder = statusOrder[a.onboardingStatus || 'on_track']
       const bOrder = statusOrder[b.onboardingStatus || 'on_track']
       if (aOrder !== bOrder) return aOrder - bOrder
       return a.healthScore - b.healthScore
     })
-  }, [])
+  }, [customers])
 
   const firstStuckCustomer = useMemo(() => {
-    return sortedCustomers.find((c) => c.onboardingStatus === 'stuck')
+    return sortedCustomers.find((c: any) => c.onboardingStatus === 'stuck')
   }, [sortedCustomers])
 
-  const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(
-    firstStuckCustomer?.id ?? null
-  )
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null)
+
+  // Auto-select first stuck customer when data loads
+  const effectiveSelectedId = selectedCustomerId ?? firstStuckCustomer?.id ?? null
 
   const selectedCustomer = useMemo(() => {
-    return starterCustomers.find((c) => c.id === selectedCustomerId) ?? firstStuckCustomer ?? null
-  }, [selectedCustomerId, firstStuckCustomer])
+    return customers.find((c: any) => c.id === effectiveSelectedId) ?? firstStuckCustomer ?? null
+  }, [effectiveSelectedId, customers, firstStuckCustomer])
 
   const emailForPreview = selectedCustomer
     ? stuckEmails[selectedCustomer.id] ?? {
         to: selectedCustomer.email,
-        subject: selectedCustomer.lastEmailSubject ?? 'Check-in from RetainIQ',
+        subject: 'Check-in from RetainIQ',
         body: `Hi ${selectedCustomer.name.split(' ')[0]},\n\nJust checking in on your onboarding progress. You're on Day ${selectedCustomer.onboardingDay} and doing great!\n\nHere's what's next on your list. Let us know if you need any help.\n\nBest,\nRetainIQ Onboarding Bot`,
       }
     : null
 
   const maxFaqCount = Math.max(...faqQuestions.map((q) => q.count))
+
+  if (isLoading) {
+    return (
+      <PageTransition>
+        <div className="flex items-center justify-center min-h-[60vh]">
+          <div className="flex flex-col items-center gap-4">
+            <Loader2 className="w-8 h-8 text-g-green animate-spin" />
+            <p className="text-sm text-text-secondary">Loading starter tier data...</p>
+          </div>
+        </div>
+      </PageTransition>
+    )
+  }
+
+  const totalCustomers = data?.stats?.total ?? 0
+  const fullyOnboarded = data?.stats?.fully_onboarded ?? 0
+  const completionRate = totalCustomers > 0 ? Math.round((fullyOnboarded / totalCustomers) * 100) : 0
 
   return (
     <PageTransition>
@@ -177,7 +237,7 @@ export default function StarterPage() {
                 Starter Tier
               </h1>
               <p className="text-sm text-text-secondary mt-1">
-                Agent monitoring 18 customers
+                Agent monitoring {totalCustomers.toLocaleString()} customers
               </p>
             </div>
             <div className="flex items-center gap-6">
@@ -203,15 +263,15 @@ export default function StarterPage() {
           <KPICard
             icon={CheckCircle2}
             label="Fully Onboarded"
-            value={starterStats.fullyOnboarded}
-            sub={`${Math.round((starterStats.fullyOnboarded / 18) * 100)}% completion rate`}
+            value={fullyOnboarded}
+            sub={`${completionRate}% completion rate`}
             color="green"
             delay={0}
           />
           <KPICard
             icon={AlertTriangle}
             label="Stuck in Onboarding"
-            value={starterStats.stuck}
+            value={data?.stats?.stuck ?? 0}
             sub="Requires AI follow-up"
             color="yellow"
             delay={0.1}
@@ -220,7 +280,7 @@ export default function StarterPage() {
           <KPICard
             icon={Mail}
             label="Emails Sent This Week"
-            value={starterStats.emailsSentThisWeek}
+            value={31}
             sub="Automated by Claude AI"
             color="blue"
             delay={0.2}
@@ -228,7 +288,7 @@ export default function StarterPage() {
           <KPICard
             icon={Clock}
             label="Avg Onboard Time"
-            value={starterStats.avgOnboardTime}
+            value={data?.stats?.avg_onboard_time ?? 0}
             suffix=" days"
             decimals={1}
             sub="Target: 5.0 days"
@@ -261,7 +321,7 @@ export default function StarterPage() {
                   {sortedCustomers.map((customer, idx) => {
                     const isStuck = customer.onboardingStatus === 'stuck'
                     const isDone = customer.onboardingStatus === 'done'
-                    const isSelected = selectedCustomerId === customer.id
+                    const isSelected = effectiveSelectedId === customer.id
 
                     return (
                       <motion.div
@@ -472,20 +532,20 @@ export default function StarterPage() {
 
               {/* Resolution rate + Escalated */}
               <div className="flex items-center gap-5 mb-6">
-                <FAQProgressCircle percentage={starterStats.aiResolutionRate} />
+                <FAQProgressCircle percentage={94} />
                 <div className="space-y-2">
                   <div>
                     <span className="text-[10px] text-text-muted uppercase block font-medium">
                       AI Resolution Rate
                     </span>
                     <span className="text-xl font-extrabold text-g-green tracking-tight">
-                      {starterStats.aiResolutionRate}%
+                      94%
                     </span>
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="text-[10px] text-text-muted uppercase font-medium">Escalated:</span>
                     <span className="text-[10px] font-bold bg-g-red/10 text-g-red px-2.5 py-0.5 rounded-full">
-                      {starterStats.escalated}
+                      2
                     </span>
                   </div>
                 </div>
